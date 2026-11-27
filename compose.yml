@@ -1,0 +1,99 @@
+services:
+  certs:
+    image: alpine:3.20
+    volumes:
+      - ./certs:/certs
+      - ./scripts/gen-certs.sh:/gen-certs.sh:ro
+    command:
+      ["sh", "-c", "apk add --no-cache openssl >/dev/null && sh /gen-certs.sh"]
+    restart: "no"
+
+  etcd:
+    image: gcr.io/etcd-development/etcd:v3.5.16
+    restart: unless-stopped
+    depends_on:
+      certs:
+        condition: service_completed_successfully
+    command:
+      - /usr/local/bin/etcd
+      - --name=etcd
+      - --data-dir=/etcd-data
+      - --listen-client-urls=https://0.0.0.0:2379
+      - --advertise-client-urls=https://etcd:2379
+      - --listen-peer-urls=http://0.0.0.0:2380
+      - --initial-advertise-peer-urls=http://etcd:2380
+      - --initial-cluster=etcd=http://etcd:2380
+      - --client-cert-auth=true
+      - --trusted-ca-file=/certs/ca.crt
+      - --cert-file=/certs/etcd-server.crt
+      - --key-file=/certs/etcd-server.key
+      - --client-cert-file=/certs/apiserver-etcd-client.crt
+      - --client-key-file=/certs/apiserver-etcd-client.key
+    volumes:
+      - etcd-data:/etcd-data
+      - ./certs:/certs:ro
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "/usr/local/bin/etcdctl",
+          "endpoint",
+          "health",
+          "--endpoints=https://localhost:2379",
+          "--cacert=/certs/ca.crt",
+          "--cert=/certs/apiserver-etcd-client.crt",
+          "--key=/certs/apiserver-etcd-client.key",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  kms-plugin:
+    build: .
+    image: kube-apiserver-kms-plugin-sakuracloud:latest
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      KMS_SOCKET: /run/kms-plugin/socket.sock
+    volumes:
+      - kms-socket:/run/kms-plugin
+
+  kube-apiserver:
+    image: registry.k8s.io/kube-apiserver:v1.37.3
+    restart: unless-stopped
+    depends_on:
+      certs:
+        condition: service_completed_successfully
+      etcd:
+        condition: service_healthy
+      kms-plugin:
+        condition: service_started
+    command:
+      - /usr/local/bin/kube-apiserver
+      - --bind-address=0.0.0.0
+      - --secure-port=6443
+      - --authorization-mode=AlwaysAllow
+      - --client-ca-file=/etc/kubernetes/pki/ca.crt
+      - --tls-cert-file=/etc/kubernetes/pki/apiserver.crt
+      - --tls-private-key-file=/etc/kubernetes/pki/apiserver.key
+      - --etcd-servers=https://etcd:2379
+      - --etcd-cafile=/etc/kubernetes/pki/ca.crt
+      - --etcd-certfile=/etc/kubernetes/pki/apiserver-etcd-client.crt
+      - --etcd-keyfile=/etc/kubernetes/pki/apiserver-etcd-client.key
+      - --service-account-issuer=https://kubernetes.default.svc.cluster.local
+      - --service-account-key-file=/etc/kubernetes/pki/sa.pub
+      - --service-account-signing-key-file=/etc/kubernetes/pki/sa.key
+      - --service-cluster-ip-range=10.96.0.0/12
+      - --encryption-provider-config=/etc/kubernetes/enc/encryption-provider-config.yaml
+      - --v=2
+    ports:
+      - "127.0.0.1:6443:6443"
+    volumes:
+      - ./certs:/etc/kubernetes/pki:ro
+      - ./encryption-provider-config.yaml:/etc/kubernetes/enc/encryption-provider-config.yaml:ro
+      - kms-socket:/run/kms-plugin
+
+volumes:
+  etcd-data:
+  kms-socket:
