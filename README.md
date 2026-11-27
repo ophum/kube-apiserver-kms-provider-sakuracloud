@@ -1,4 +1,4 @@
-# kube-apiserver-kms-plugin-sakuracloud
+# kube-apiserver-kms-provider-sakuracloud
 
 SAKURA Cloud KMS を利用する Kubernetes KMS v2 gRPC プラグインです。kube-apiserver の encryption at rest(保存データの暗号化)を、compose.yml だけでローカルに立ち上げた kube-apiserver + etcd 環境で動作させます。
 
